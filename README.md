@@ -25,18 +25,23 @@ Infrastructure provisioning CLI for Biz2Bricks. Provisions GCP resources using g
 
 4. **Required APIs** - Enable these in your GCP project:
    ```bash
-   gcloud services enable sqladmin.googleapis.com
-   gcloud services enable storage.googleapis.com
-   gcloud services enable iam.googleapis.com
-   gcloud services enable secretmanager.googleapis.com
+   gcloud services enable \
+     sqladmin.googleapis.com \
+     storage.googleapis.com \
+     iam.googleapis.com \
+     secretmanager.googleapis.com
    ```
 
 ## Installation
 
-**Prerequisite:** SSH key must be configured for GitHub access (the core dependency is a private repo).
+### Step 1: Create Virtual Environment
+
 ```bash
-ssh -T git@github.com   # Verify SSH authentication works
+python3 -m venv .venv
+source .venv/bin/activate
 ```
+
+### Step 2: Install Package
 
 ```bash
 # Install the package (biz2bricks-core is fetched from GitHub automatically)
@@ -46,160 +51,250 @@ pip install -e .
 pip install -e ".[dev]"
 ```
 
-## Creating a Fresh GCP Environment
+### Troubleshooting Installation
+
+If you get `ModuleNotFoundError: No module named 'biz2bricks_infra'`:
+
+```bash
+# Uninstall and reinstall
+pip uninstall biz2bricks-infra -y
+pip cache purge
+pip install -e .
+```
+
+If that still fails, recreate the virtual environment:
+
+```bash
+rm -rf .venv
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+## Quick Start: Complete GCP Setup
 
 ### Step 1: Authenticate with GCP
 
 ```bash
-# Login to GCP
 gcloud auth login
-
-# Set your project
+gcloud auth application-default login
 gcloud config set project YOUR_PROJECT_ID
-
-# Verify
-gcloud config get-value project
 ```
 
-### Step 2: Enable Required APIs
+### Step 2: Configure Environment
 
-```bash
-gcloud services enable \
-  sqladmin.googleapis.com \
-  storage.googleapis.com \
-  iam.googleapis.com \
-  secretmanager.googleapis.com
-```
-
-### Step 3: Configure Environment
-
-Edit `.env.production` with your values:
+Create a `.env` file in the project root with your configuration:
 
 ```env
-# Required
+# =============================================================================
+# GCP Configuration
+# =============================================================================
 GCP_PROJECT_ID=your-project-id
 
-# Cloud SQL (instance name only, not full path)
-CLOUD_SQL_INSTANCE=your-instance-name
+# =============================================================================
+# Cloud SQL Configuration
+# =============================================================================
+# IMPORTANT: Use format "project:region:instance"
+CLOUD_SQL_INSTANCE=your-project-id:us-central1:your-instance-name
+
+# Database credentials
 DATABASE_NAME=doc_intelligence
 DATABASE_USER=postgres
 DATABASE_PASSWORD=your-secure-password
 
-# GCS
+# REQUIRED: Enable Cloud SQL Python Connector for remote connections
+USE_CLOUD_SQL_CONNECTOR=true
+
+# =============================================================================
+# Cloud Storage
+# =============================================================================
 GCS_BUCKET_NAME=your-bucket-name
 
-# Auth secrets (leave empty to auto-generate)
+# =============================================================================
+# Authentication Secrets (auto-generated if empty during provisioning)
+# =============================================================================
 JWT_SECRET_KEY=
 REFRESH_SECRET_KEY=
 ```
 
-### Step 4: Preview Changes (Dry Run)
+**Important:** The `USE_CLOUD_SQL_CONNECTOR=true` setting is required for connecting to Cloud SQL from your local machine.
+
+### Step 3: Preview Changes (Optional)
 
 ```bash
 biz2bricks provision full-setup --dry-run
 ```
 
-This shows what will be created without making changes.
-
-### Step 5: Provision Resources
+### Step 4: Provision GCP Resources
 
 ```bash
-biz2bricks provision full-setup
+biz2bricks provision full-setup --force
 ```
 
-You'll be prompted to confirm. Use `--force` to skip confirmation.
+This creates:
+- Cloud SQL PostgreSQL instance
+- Database and user
+- GCS bucket with versioning
+- Service account with IAM roles
+- Secrets in Secret Manager
 
-### Step 6: Verify in GCP Console
+### Step 5: Initialize Database Schema
 
+```bash
+biz2bricks db init
+```
+
+This creates all database tables from the SQLAlchemy models.
+
+### Step 6: Verify Resources
+
+```bash
+# Check Cloud SQL
+gcloud sql instances describe YOUR_INSTANCE_NAME --format="table(name,state,region)"
+
+# Check GCS bucket
+gsutil ls -b gs://YOUR_BUCKET_NAME
+
+# Check service account
+gcloud iam service-accounts list --filter="email:document-intelligence"
+
+# Check secrets
+gcloud secrets list
+```
+
+Or view in GCP Console:
 - **Cloud SQL**: https://console.cloud.google.com/sql/instances
 - **Storage**: https://console.cloud.google.com/storage/browser
 - **IAM**: https://console.cloud.google.com/iam-admin/serviceaccounts
 - **Secret Manager**: https://console.cloud.google.com/security/secret-manager
-
-### Step 7: Run Database Migrations
-
-```bash
-biz2bricks migrate upgrade head
-```
 
 ## CLI Reference
 
 ### Provision Commands
 
 ```bash
-biz2bricks provision full-setup [OPTIONS]    # All resources
-biz2bricks provision cloud-sql [OPTIONS]     # Only Cloud SQL
-biz2bricks provision gcs-bucket [OPTIONS]    # Only GCS bucket
+biz2bricks provision full-setup [OPTIONS]       # All resources
+biz2bricks provision cloud-sql [OPTIONS]        # Only Cloud SQL
+biz2bricks provision gcs-bucket [OPTIONS]       # Only GCS bucket
 biz2bricks provision service-account [OPTIONS]  # Only service account
-biz2bricks provision secrets [OPTIONS]       # Only secrets
+biz2bricks provision secrets [OPTIONS]          # Only secrets
 
 Options:
   --env-file PATH   Environment file (default: .env.production)
   --dry-run         Preview without executing
-  --force           Skip confirmation prompts
+  --force           Skip confirmation prompts (does NOT force recreate)
 ```
 
-### Migration Commands
+### Delete Commands
 
 ```bash
-biz2bricks migrate upgrade [REVISION]   # Upgrade to revision (default: head)
-biz2bricks migrate downgrade [REVISION] # Downgrade (default: -1)
-biz2bricks migrate current              # Show current revision
-biz2bricks migrate history [-v]         # Show migration history
-biz2bricks migrate revision -m "msg"    # Create new migration
+biz2bricks delete all --force              # Delete ALL resources
+biz2bricks delete cloud-sql --force        # Delete Cloud SQL instance
+biz2bricks delete gcs-bucket --force       # Delete GCS bucket and contents
+biz2bricks delete service-account --force  # Delete service account
+biz2bricks delete secrets --force          # Delete all secrets
 ```
 
-### Environment Generation
+### Database Commands
 
 ```bash
-biz2bricks generate-env --project-id PROJECT_ID [-o OUTPUT_FILE]
+biz2bricks db init [--env-file .env]    # Create tables from SQLAlchemy models
+biz2bricks db status [--env-file .env]  # Show database status and tables
 ```
 
-Discovers provisioned resources and generates a `.env` file.
+### Other Commands
+
+```bash
+biz2bricks generate-env --project-id PROJECT_ID  # Generate .env from provisioned resources
+```
+
+## Force Recreating Resources
+
+The provisioning commands are **idempotent** - they skip existing resources. The `--force` flag only skips confirmation prompts, it does NOT force recreate resources.
+
+To force recreate all resources from scratch:
+
+```bash
+# Step 1: Delete all existing resources
+biz2bricks delete all --force
+
+# Step 2: Provision fresh resources
+biz2bricks provision full-setup --force
+
+# Step 3: Recreate database schema
+biz2bricks db init
+```
+
+To recreate individual resources:
+
+```bash
+# Example: Recreate only Cloud SQL
+biz2bricks delete cloud-sql --force
+biz2bricks provision cloud-sql --force
+```
+
+## Updating biz2bricks-core
+
+To update to the latest version of biz2bricks-core from GitHub:
+
+```bash
+pip install -e . --force-reinstall --no-cache-dir
+```
+
+## Environment File Notes
+
+- **`.env`** - Used by `biz2bricks-core` for database connections (loaded at import time)
+- **`.env.production`** - Used by provisioning commands (can be specified with `--env-file`)
+
+For database commands (`db init`, `db status`), ensure your `.env` file has the correct settings including `USE_CLOUD_SQL_CONNECTOR=true`.
 
 ## Troubleshooting
 
 ### "gcloud not authenticated"
+
 ```bash
 gcloud auth login
 gcloud auth application-default login
 ```
 
 ### "API not enabled"
+
 ```bash
-gcloud services enable sqladmin.googleapis.com
-# ... enable other required APIs
+gcloud services enable sqladmin.googleapis.com storage.googleapis.com iam.googleapis.com secretmanager.googleapis.com
 ```
 
 ### "Permission denied"
+
 Ensure your account has these roles:
 - `roles/cloudsql.admin`
 - `roles/storage.admin`
 - `roles/iam.serviceAccountAdmin`
 - `roles/secretmanager.admin`
 
-### "biz2bricks-core not found"
-Install the core package first:
-```bash
-pip install -e ../biz2bricks_core
-```
+### Database connection fails (localhost:5432)
 
-## Provisioning Individual Resources
-
-You can provision resources separately:
+This means `USE_CLOUD_SQL_CONNECTOR=true` is missing from your `.env` file. Add it:
 
 ```bash
-# Create only the Cloud SQL instance
-biz2bricks provision cloud-sql
-
-# Create only the GCS bucket
-biz2bricks provision gcs-bucket
-
-# Create only the service account
-biz2bricks provision service-account
-
-# Create only the secrets
-biz2bricks provision secrets
+echo "USE_CLOUD_SQL_CONNECTOR=true" >> .env
 ```
 
-Each command is idempotent - it checks if the resource exists before creating.
+### "ModuleNotFoundError: No module named 'biz2bricks_infra'"
+
+Reinstall the package:
+
+```bash
+pip uninstall biz2bricks-infra -y
+pip install -e .
+```
+
+If that doesn't work, recreate the virtual environment (see Installation section).
+
+### Resources "already exist" but you want to recreate
+
+Use delete commands first, then provision:
+
+```bash
+biz2bricks delete all --force
+biz2bricks provision full-setup --force
+```

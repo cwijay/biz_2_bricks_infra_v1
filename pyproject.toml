@@ -59,4 +59,4 @@ python_version = "3.12"
 strict = true
 
 [tool.uv.sources]
-biz2bricks-core = { git = "https://github.com/cwijay/biz_to_bricks_core_v1.git", tag = "v0.1.0" }
+biz2bricks-core = { git = "https://github.com/cwijay/biz_to_bricks_core_v1.git" }
