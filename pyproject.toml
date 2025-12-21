@@ -1,0 +1,62 @@
+[project]
+name = "biz2bricks-infra"
+version = "0.1.0"
+description = "Infrastructure provisioning CLI for Biz2Bricks: GCP resources and database migrations"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [
+    {name = "Biz2Bricks Team"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    # Core library (models, db) - from private GitHub repo
+    "biz2bricks-core @ git+https://github.com/cwijay/biz_to_bricks_core_v1.git",
+    # Google Cloud
+    "google-cloud-storage>=2.19.0",
+    "google-cloud-secret-manager>=2.16.0",
+    "google-auth>=2.38.0",
+    # CLI
+    "click>=8.1.0",
+    "pyyaml>=6.0.1",
+    # Configuration
+    "pydantic>=2.12.5,<3.0.0",
+    "pydantic-settings>=2.7.1",
+    "python-dotenv>=1.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.8.0",
+]
+
+[project.scripts]
+biz2bricks = "biz2bricks_infra.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/biz2bricks_infra"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.uv.sources]
+biz2bricks-core = { git = "https://github.com/cwijay/biz_to_bricks_core_v1.git", tag = "v0.1.0" }
