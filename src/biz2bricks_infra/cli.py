@@ -443,6 +443,100 @@ def db_status(env_file: str):
         sys.exit(1)
 
 
+@db_group.command("reset")
+@click.option("--env-file", default=".env", help="Environment file for database config")
+@click.option("--force", "-f", is_flag=True, help="Skip confirmation prompt")
+def db_reset(env_file: str, force: bool):
+    """Drop ALL tables and recreate schema from biz2bricks_core models.
+
+    WARNING: This is a destructive operation that will delete all data.
+    """
+    import asyncio
+    from pathlib import Path
+    from dotenv import load_dotenv
+    import os
+
+    # Load environment
+    env_path = Path(env_file)
+    if env_path.exists():
+        load_dotenv(env_path)
+        click.echo(f"Loaded environment from: {env_path}")
+
+    db_name = os.environ.get("DATABASE_NAME", "unknown")
+    db_user = os.environ.get("DATABASE_USER", "postgres")
+
+    # Safety confirmation
+    if not force:
+        click.echo(
+            click.style(
+                "\nWARNING: This will DROP ALL TABLES and delete all data!",
+                fg="red",
+                bold=True,
+            )
+        )
+        click.echo(f"Database: {db_name}")
+        click.echo("")
+        confirmation = click.prompt("Type 'yes' to confirm", default="no")
+        if confirmation.lower() != "yes":
+            click.echo("Aborted.")
+            sys.exit(0)
+
+    try:
+        from biz2bricks_core import db
+        from sqlalchemy import text
+
+        async def reset_database():
+            click.echo("\nTesting database connection...")
+            if not await db.test_connection():
+                click.echo(click.style("Could not connect to database", fg="red"))
+                return False
+
+            click.echo(click.style("Connection successful!", fg="green"))
+
+            engine = await db.get_engine_async()
+            async with engine.begin() as conn:
+                click.echo("Dropping all tables (DROP SCHEMA CASCADE)...")
+                await conn.execute(text("DROP SCHEMA public CASCADE"))
+                await conn.execute(text("CREATE SCHEMA public"))
+                await conn.execute(text(f"GRANT ALL ON SCHEMA public TO {db_user}"))
+                await conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
+
+            click.echo(click.style("Schema dropped successfully!", fg="green"))
+
+            click.echo("Creating tables from biz2bricks_core models...")
+            await db.create_tables()
+
+            # Show created tables
+            async with engine.connect() as conn:
+                result = await conn.execute(
+                    text(
+                        """
+                    SELECT table_name FROM information_schema.tables
+                    WHERE table_schema = 'public' ORDER BY table_name
+                """
+                    )
+                )
+                tables = result.fetchall()
+
+            click.echo(click.style(f"\nTables created ({len(tables)}):", fg="green"))
+            for (table_name,) in tables:
+                click.echo(f"  - {table_name}")
+
+            await db.close_all()
+            return True
+
+        success = asyncio.run(reset_database())
+        if success:
+            click.echo(click.style("\nDatabase reset complete!", fg="green", bold=True))
+        sys.exit(0 if success else 1)
+
+    except ImportError:
+        click.echo(
+            click.style("biz2bricks-core not installed. Install it first.", fg="red")
+        )
+        sys.exit(1)
+
+
 # =============================================================================
 # Migration Commands
 # =============================================================================

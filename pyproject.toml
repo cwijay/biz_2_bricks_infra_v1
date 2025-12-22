@@ -16,10 +16,10 @@ classifiers = [
 dependencies = [
     # Core library (models, db) - from private GitHub repo
     "biz2bricks-core @ git+https://github.com/cwijay/biz_to_bricks_core_v1.git",
-    # Google Cloud
-    "google-cloud-storage>=2.19.0",
-    "google-cloud-secret-manager>=2.16.0",
-    "google-auth>=2.38.0",
+    # Google Cloud (pinned for compatibility with google-cloud-aiplatform, google-adk)
+    "google-cloud-storage>=2.19.0,<3.0.0",
+    "google-cloud-secret-manager>=2.16.0,<3.0.0",
+    "google-auth>=2.38.0,<3.0.0",
     # CLI
     "click>=8.1.0",
     "pyyaml>=6.0.1",

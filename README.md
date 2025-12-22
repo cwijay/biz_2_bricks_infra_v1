@@ -198,8 +198,20 @@ biz2bricks delete secrets --force          # Delete all secrets
 ### Database Commands
 
 ```bash
-biz2bricks db init [--env-file .env]    # Create tables from SQLAlchemy models
-biz2bricks db status [--env-file .env]  # Show database status and tables
+biz2bricks db init [--env-file .env]           # Create tables from SQLAlchemy models
+biz2bricks db status [--env-file .env]         # Show database status and tables
+biz2bricks db reset [--env-file .env] [--force] # Drop ALL tables and recreate schema
+```
+
+**WARNING:** `db reset` is destructive - it drops all tables and data!
+
+### Migration Commands
+
+```bash
+biz2bricks migrate upgrade head    # Apply all pending migrations
+biz2bricks migrate downgrade -1    # Rollback one migration
+biz2bricks migrate current         # Show current migration revision
+biz2bricks migrate history         # Show migration history
 ```
 
 ### Other Commands
