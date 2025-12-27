@@ -17,7 +17,13 @@ pip install -e ".[dev]"             # Include dev dependencies (pytest, black, r
 
 ### CLI Usage
 ```bash
-# Provision GCP resources
+# Complete environment setup (recommended)
+biz2bricks setup all --project-id PROJECT  # Full setup: GCP + DB + seed data
+biz2bricks setup all --project-id PROJECT --dry-run  # Preview without executing
+biz2bricks setup all --project-id PROJECT --force    # Delete existing resources first, then recreate
+biz2bricks setup all --project-id PROJECT --skip-gcp # Skip GCP, just DB setup
+
+# Provision GCP resources (individual)
 biz2bricks provision full-setup     # Provision all GCP resources
 biz2bricks provision full-setup --dry-run  # Preview without executing
 biz2bricks provision cloud-sql      # Only Cloud SQL

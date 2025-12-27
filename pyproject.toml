@@ -14,7 +14,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    # Core library (models, db) - from private GitHub repo
+    # Core library (models, db) - from GitHub repo
     "biz2bricks-core @ git+https://github.com/cwijay/biz_to_bricks_core_v1.git",
     # Google Cloud (pinned for compatibility with google-cloud-aiplatform, google-adk)
     "google-cloud-storage>=2.19.0,<3.0.0",
@@ -35,6 +35,11 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
     "mypy>=1.8.0",
+]
+# For complete setup with database operations
+db = [
+    "asyncpg>=0.29.0",
+    "google-cloud-sql-connector>=1.10.0",
 ]
 
 [project.scripts]

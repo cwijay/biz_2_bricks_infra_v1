@@ -11,6 +11,21 @@ Infrastructure provisioning CLI for Biz2Bricks. Provisions GCP resources using g
 | **Service Account** | `document-intelligence-api-sa` with Cloud SQL, Storage, and Secret Manager roles |
 | **Secrets** | DATABASE_PASSWORD, JWT_SECRET_KEY, REFRESH_SECRET_KEY in Secret Manager |
 
+## Database Tables
+
+All database tables are defined in **biz2bricks_core** and created by the `biz2bricks setup all` command:
+
+| Category | Tables | Description |
+|----------|--------|-------------|
+| **Core** | organizations, users, folders, documents, audit_logs | Multi-tenant organization and document management |
+| **AI Processing** | processing_jobs, document_generations | Job tracking and generated content cache |
+| **Memory** | user_preferences, conversation_summaries, memory_entries | Long-term memory for AI agents |
+| **RAG** | file_search_stores, document_folders | Gemini File Search store registry |
+| **Usage Tracking** | subscription_tiers, organization_subscriptions, token_usage_records, resource_usage_records, usage_aggregations | Quota management and usage analytics |
+| **Semantic Cache** | rag_query_cache | RAG query caching with pgvector (768-dim embeddings) |
+
+**Total: 17 tables** created from SQLAlchemy models.
+
 ## Prerequisites
 
 1. **Python 3.12+**
@@ -71,7 +86,61 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-## Quick Start: Complete GCP Setup
+## Quick Start: One-Command Setup
+
+The fastest way to set up a complete environment:
+
+### Step 1: Authenticate with GCP
+
+```bash
+gcloud auth login
+gcloud auth application-default login
+gcloud config set project YOUR_PROJECT_ID
+```
+
+### Step 2: Create Configuration File
+
+Create a `.env.production` file with minimal required settings:
+
+```env
+GCP_PROJECT_ID=your-project-id
+CLOUD_SQL_INSTANCE=your-project-id:us-central1:doc-intelligence-db
+DATABASE_NAME=doc_intelligence
+DATABASE_USER=postgres
+DATABASE_PASSWORD=  # Will be auto-generated
+GCS_BUCKET_NAME=your-bucket-name
+```
+
+### Step 3: Run Complete Setup
+
+```bash
+# One command does everything!
+biz2bricks setup all --project-id YOUR_PROJECT_ID
+
+# Or preview first
+biz2bricks setup all --project-id YOUR_PROJECT_ID --dry-run
+```
+
+This single command:
+1. Checks prerequisites (gcloud auth, APIs)
+2. Provisions GCP resources (Cloud SQL, GCS, Service Account, Secrets)
+3. Generates `.env` file with connection details
+4. Creates all database tables (including pgvector support)
+5. Seeds subscription tiers (Free, Pro, Enterprise)
+6. Validates the setup
+
+### Step 4: Start Your Application
+
+```bash
+cd ../doc_intelligence_ai_v3.0
+uvicorn src.main:app --reload
+```
+
+---
+
+## Alternative: Step-by-Step Setup
+
+If you prefer more control, use the individual commands:
 
 ### Step 1: Authenticate with GCP
 
@@ -83,7 +152,7 @@ gcloud config set project YOUR_PROJECT_ID
 
 ### Step 2: Configure Environment
 
-Create a `.env` file in the project root with your configuration:
+Create a `.env.production` file in the project root:
 
 ```env
 # =============================================================================
@@ -138,15 +207,29 @@ This creates:
 - Service account with IAM roles
 - Secrets in Secret Manager
 
-### Step 5: Initialize Database Schema
+### Step 5: Generate Environment File
 
 ```bash
-biz2bricks db init
+biz2bricks generate-env --project-id YOUR_PROJECT_ID -o .env
+```
+
+### Step 6: Initialize Database Schema
+
+```bash
+biz2bricks db init --env-file .env
 ```
 
 This creates all database tables from the SQLAlchemy models.
 
-### Step 6: Verify Resources
+### Step 7: Seed Subscription Tiers
+
+```bash
+biz2bricks seed tiers --env-file .env
+```
+
+This creates the default Free, Pro, and Enterprise subscription tiers.
+
+### Step 8: Verify Resources
 
 ```bash
 # Check Cloud SQL
@@ -169,6 +252,42 @@ Or view in GCP Console:
 - **Secret Manager**: https://console.cloud.google.com/security/secret-manager
 
 ## CLI Reference
+
+### Setup Commands (Recommended)
+
+```bash
+# Complete one-command setup
+biz2bricks setup all --project-id PROJECT_ID [OPTIONS]
+
+Options:
+  --project-id TEXT     GCP project ID (required)
+  --region TEXT         GCP region (default: us-central1)
+  --env-file PATH       Provisioning config file (default: .env.production)
+  --output-env PATH     Output .env file for app (default: .env)
+  --dry-run             Preview actions without executing
+  --skip-gcp            Skip GCP resource provisioning
+  --skip-db             Skip database table creation
+  --skip-seed           Skip subscription tier seeding
+  --skip-validation     Skip final validation
+
+# Database-only setup (when GCP resources already exist)
+biz2bricks setup db-only --env-file .env
+```
+
+**Examples:**
+```bash
+# Full setup for new environment
+biz2bricks setup all --project-id my-project
+
+# Preview what would be done
+biz2bricks setup all --project-id my-project --dry-run
+
+# Skip GCP (resources already exist), just setup database
+biz2bricks setup all --project-id my-project --skip-gcp
+
+# Only create database tables
+biz2bricks setup db-only --env-file .env
+```
 
 ### Provision Commands
 
@@ -205,6 +324,25 @@ biz2bricks db reset [--env-file .env] [--force] # Drop ALL tables and recreate s
 
 **WARNING:** `db reset` is destructive - it drops all tables and data!
 
+### Seed Commands
+
+```bash
+biz2bricks seed tiers [OPTIONS]            # Seed subscription tiers (Free/Pro/Enterprise)
+
+Options:
+  --env-file PATH   Environment file (default: .env)
+  --list, -l        List current tiers without seeding
+  --reset, -r       Delete all tiers and re-seed
+  --force, -f       Skip confirmation prompts
+```
+
+**Default Tiers:**
+| Tier | Tokens/mo | Pages | Queries | Storage | Price |
+|------|-----------|-------|---------|---------|-------|
+| Free | 50,000 | 50 | 100 | 1 GB | $0/mo |
+| Pro | 500,000 | 500 | 1,000 | 10 GB | $29/mo |
+| Enterprise | 5,000,000 | 5,000 | 10,000 | 100 GB | $199/mo |
+
 ### Migration Commands
 
 ```bash
@@ -214,10 +352,14 @@ biz2bricks migrate current         # Show current migration revision
 biz2bricks migrate history         # Show migration history
 ```
 
-### Other Commands
+### Utility Commands
 
 ```bash
 biz2bricks generate-env --project-id PROJECT_ID  # Generate .env from provisioned resources
+biz2bricks status                                 # Show status of all provisioned resources
+biz2bricks sa create-key -o key.json             # Create service account JSON key
+biz2bricks secrets get SECRET_NAME               # Get secret value from Secret Manager
+biz2bricks secrets list                          # List all secrets
 ```
 
 ## Force Recreating Resources
@@ -259,6 +401,41 @@ pip install -e . --force-reinstall --no-cache-dir
 - **`.env.production`** - Used by provisioning commands (can be specified with `--env-file`)
 
 For database commands (`db init`, `db status`), ensure your `.env` file has the correct settings including `USE_CLOUD_SQL_CONNECTOR=true`.
+
+## Architecture
+
+### Consolidated Models
+
+All SQLAlchemy models are defined in **biz2bricks_core**:
+
+```
+biz2bricks_core/src/biz2bricks_core/models/
+├── base.py       # Base class, enums (AuditAction, AuditEntityType)
+├── core.py       # OrganizationModel, UserModel, FolderModel
+├── documents.py  # DocumentModel, AuditLogModel
+└── usage.py      # SubscriptionPlanModel, UsageLimitsModel, UsageEventModel, UsageDailySummaryModel, ModelPricingModel
+```
+
+### Table Creation Options
+
+You have **two equivalent ways** to create database tables:
+
+**Option 1: Using biz2bricks_infra (recommended)**
+```bash
+biz2bricks setup all --project-id PROJECT_ID
+# Or just database setup:
+biz2bricks setup db-only --env-file .env
+```
+
+**Option 2: Using doc_intelligence_ai_v3.0 scripts**
+```bash
+cd ../doc_intelligence_ai_v3.0
+python scripts/db_setup.py setup      # Create all tables
+python scripts/db_setup.py status     # Check database state
+python scripts/db_setup.py reset      # Drop and recreate all tables
+```
+
+Both methods import models from biz2bricks_core, so they create **identical schemas**.
 
 ## Troubleshooting
 

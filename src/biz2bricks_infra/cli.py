@@ -482,29 +482,86 @@ def db_reset(env_file: str, force: bool):
             sys.exit(0)
 
     try:
-        from biz2bricks_core import db
         from sqlalchemy import text
 
         async def reset_database():
-            click.echo("\nTesting database connection...")
+            # First, use raw asyncpg to drop schema and enable pgvector
+            # BEFORE importing biz2bricks_core.db (which auto-creates tables)
+            from google.cloud.sql.connector import Connector, IPTypes
+            import asyncpg
+
+            instance_name = os.environ.get("CLOUD_SQL_INSTANCE", "")
+            db_name_env = os.environ.get("DATABASE_NAME", "doc_intelligence")
+            use_connector = os.environ.get("USE_CLOUD_SQL_CONNECTOR", "true").lower() == "true"
+            ip_type_str = os.environ.get("CLOUD_SQL_IP_TYPE", "PUBLIC").upper()
+
+            click.echo("\nConnecting to database...")
+
+            conn = None
+            connector = None
+
+            if use_connector and instance_name:
+                try:
+                    ip_type = IPTypes.PUBLIC if ip_type_str == "PUBLIC" else IPTypes.PRIVATE
+                    loop = asyncio.get_running_loop()
+                    connector = Connector(loop=loop)
+                    conn = await connector.connect_async(
+                        instance_name, "asyncpg",
+                        user=db_user, password=os.environ.get("DATABASE_PASSWORD", ""),
+                        db=db_name_env, ip_type=ip_type,
+                    )
+                except Exception as e:
+                    click.echo(click.style(f"Cloud SQL Connector failed: {e}", fg="yellow"))
+
+            if not conn:
+                # Fallback to direct connection
+                host = os.environ.get("DATABASE_HOST", "localhost")
+                port = os.environ.get("DATABASE_PORT", "5432")
+                conn = await asyncpg.connect(
+                    host=host, port=int(port), user=db_user,
+                    password=os.environ.get("DATABASE_PASSWORD", ""),
+                    database=db_name_env,
+                )
+
+            click.echo(click.style("Connection successful!", fg="green"))
+
+            try:
+                # Drop and recreate schema
+                click.echo("Dropping all tables (DROP SCHEMA CASCADE)...")
+                await conn.execute("DROP SCHEMA public CASCADE")
+                await conn.execute("CREATE SCHEMA public")
+                await conn.execute(f"GRANT ALL ON SCHEMA public TO {db_user}")
+                await conn.execute("GRANT ALL ON SCHEMA public TO public")
+                click.echo(click.style("Schema dropped successfully!", fg="green"))
+
+                # Enable pgvector extension BEFORE biz2bricks_core imports
+                try:
+                    await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                    click.echo(click.style("pgvector extension enabled", fg="green"))
+                except Exception as e:
+                    click.echo(click.style(f"Warning: Could not enable pgvector: {e}", fg="yellow"))
+                    click.echo("  (Semantic cache will use text fallback)")
+
+            finally:
+                await conn.close()
+                if connector:
+                    try:
+                        connector.close()
+                    except Exception:
+                        pass
+
+            # NOW import and use biz2bricks_core.db - it will auto-create tables
+            click.echo("Creating tables from biz2bricks_core models...")
+            from biz2bricks_core import db
+            # Reset the tables_created flag so it will create tables
+            db._tables_created = False
+
             if not await db.test_connection():
                 click.echo(click.style("Could not connect to database", fg="red"))
                 return False
 
-            click.echo(click.style("Connection successful!", fg="green"))
-
+            # Tables should now be created by test_connection -> _ensure_tables
             engine = await db.get_engine_async()
-            async with engine.begin() as conn:
-                click.echo("Dropping all tables (DROP SCHEMA CASCADE)...")
-                await conn.execute(text("DROP SCHEMA public CASCADE"))
-                await conn.execute(text("CREATE SCHEMA public"))
-                await conn.execute(text(f"GRANT ALL ON SCHEMA public TO {db_user}"))
-                await conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
-
-            click.echo(click.style("Schema dropped successfully!", fg="green"))
-
-            click.echo("Creating tables from biz2bricks_core models...")
-            await db.create_tables()
 
             # Show created tables
             async with engine.connect() as conn:
@@ -613,196 +670,6 @@ def _run_alembic(args: list):
 
 
 # =============================================================================
-# Usage Tracking Commands
-# =============================================================================
-
-
-@main.group()
-def usage():
-    """Usage tracking and reporting commands."""
-    pass
-
-
-@usage.command("storage")
-@click.option("--org-id", required=True, help="Organization ID")
-@click.option("--env-file", default=".env", help="Environment file")
-def usage_storage(org_id: str, env_file: str):
-    """Show storage usage for an organization."""
-    import asyncio
-    from pathlib import Path
-    from dotenv import load_dotenv
-
-    env_path = Path(env_file)
-    if env_path.exists():
-        load_dotenv(env_path)
-
-    try:
-        from biz2bricks_core import usage_service, db
-
-        async def show_storage():
-            await db.get_engine_async()
-            result = await usage_service.check_storage_limit(org_id)
-
-            current_mb = result.current_bytes / (1024 * 1024)
-            limit_mb = (result.limit_bytes or 0) / (1024 * 1024)
-            remaining_mb = (result.remaining_bytes or 0) / (1024 * 1024)
-
-            click.echo(click.style("\n=== Storage Usage ===", fg="blue", bold=True))
-            click.echo(f"Organization: {org_id}")
-            click.echo(f"Tier: {result.tier}")
-            click.echo(f"Storage Used: {current_mb:.2f} MB")
-            click.echo(f"Storage Limit: {limit_mb:.2f} MB")
-            click.echo(f"Remaining: {remaining_mb:.2f} MB")
-            click.echo(f"Percentage Used: {result.percentage_used:.1f}%")
-
-            if result.percentage_used >= 90:
-                click.echo(click.style("\nWARNING: Storage almost full!", fg="red", bold=True))
-            elif result.percentage_used >= 80:
-                click.echo(click.style("\nWARNING: Approaching storage limit!", fg="yellow"))
-            else:
-                click.echo(click.style("\nStatus: OK", fg="green"))
-
-            await db.close_all()
-
-        asyncio.run(show_storage())
-
-    except ImportError:
-        click.echo(click.style("biz2bricks-core not installed", fg="red"))
-        sys.exit(1)
-    except Exception as e:
-        click.echo(click.style(f"Error: {e}", fg="red"))
-        sys.exit(1)
-
-
-@usage.command("tokens")
-@click.option("--org-id", required=True, help="Organization ID")
-@click.option("--days", default=30, help="Number of days to report")
-@click.option("--env-file", default=".env", help="Environment file")
-def usage_tokens(org_id: str, days: int, env_file: str):
-    """Show token usage for an organization."""
-    import asyncio
-    from pathlib import Path
-    from datetime import datetime, timedelta
-    from dotenv import load_dotenv
-
-    env_path = Path(env_file)
-    if env_path.exists():
-        load_dotenv(env_path)
-
-    try:
-        from biz2bricks_core import db
-        from biz2bricks_core.models.usage import UsageEventModel
-        from sqlalchemy import select, func
-
-        async def show_tokens():
-            await db.get_engine_async()
-            cutoff = datetime.utcnow() - timedelta(days=days)
-
-            async with db.session() as session:
-                stmt = select(
-                    func.count(UsageEventModel.id).label("total_requests"),
-                    func.sum(UsageEventModel.input_tokens).label("total_input"),
-                    func.sum(UsageEventModel.output_tokens).label("total_output"),
-                    func.sum(UsageEventModel.input_cost + UsageEventModel.output_cost).label("total_cost"),
-                ).where(
-                    UsageEventModel.organization_id == org_id,
-                    UsageEventModel.created_at >= cutoff
-                )
-
-                result = await session.execute(stmt)
-                row = result.first()
-
-                click.echo(click.style("\n=== Token Usage ===", fg="blue", bold=True))
-                click.echo(f"Organization: {org_id}")
-                click.echo(f"Period: Last {days} days")
-                click.echo(f"Total Requests: {row.total_requests or 0:,}")
-                click.echo(f"Input Tokens: {row.total_input or 0:,}")
-                click.echo(f"Output Tokens: {row.total_output or 0:,}")
-                click.echo(f"Total Tokens: {(row.total_input or 0) + (row.total_output or 0):,}")
-                click.echo(f"Total Cost: ${float(row.total_cost or 0):.4f}")
-
-                # Get breakdown by feature
-                feature_stmt = select(
-                    UsageEventModel.feature,
-                    func.sum(UsageEventModel.input_tokens + UsageEventModel.output_tokens).label("tokens"),
-                    func.count(UsageEventModel.id).label("requests"),
-                ).where(
-                    UsageEventModel.organization_id == org_id,
-                    UsageEventModel.created_at >= cutoff
-                ).group_by(UsageEventModel.feature)
-
-                feature_result = await session.execute(feature_stmt)
-                features = feature_result.fetchall()
-
-                if features:
-                    click.echo(click.style("\nBy Feature:", fg="cyan"))
-                    for feature, tokens, requests in features:
-                        click.echo(f"  {feature}: {tokens or 0:,} tokens ({requests} requests)")
-
-            await db.close_all()
-
-        asyncio.run(show_tokens())
-
-    except ImportError:
-        click.echo(click.style("biz2bricks-core not installed", fg="red"))
-        sys.exit(1)
-    except Exception as e:
-        click.echo(click.style(f"Error: {e}", fg="red"))
-        sys.exit(1)
-
-
-@usage.command("recalculate-storage")
-@click.option("--org-id", help="Organization ID (or use --all)")
-@click.option("--all", "all_orgs", is_flag=True, help="Recalculate for all organizations")
-@click.option("--env-file", default=".env", help="Environment file")
-def usage_recalculate(org_id: str, all_orgs: bool, env_file: str):
-    """Recalculate storage usage from documents table."""
-    import asyncio
-    from pathlib import Path
-    from dotenv import load_dotenv
-
-    if not org_id and not all_orgs:
-        click.echo(click.style("Specify --org-id or --all", fg="red"))
-        sys.exit(1)
-
-    env_path = Path(env_file)
-    if env_path.exists():
-        load_dotenv(env_path)
-
-    try:
-        from biz2bricks_core import db, usage_service, OrganizationModel
-        from sqlalchemy import select
-
-        async def recalculate():
-            await db.get_engine_async()
-
-            if all_orgs:
-                async with db.session() as session:
-                    result = await session.execute(select(OrganizationModel.id))
-                    org_ids = [row[0] for row in result.fetchall()]
-            else:
-                org_ids = [org_id]
-
-            click.echo(click.style("\n=== Recalculating Storage ===", fg="blue", bold=True))
-            for oid in org_ids:
-                storage = await usage_service.recalculate_storage(oid)
-                mb = storage / (1024 * 1024)
-                click.echo(f"  {oid}: {mb:.2f} MB")
-
-            await db.close_all()
-            click.echo(click.style("\nRecalculation complete!", fg="green"))
-
-        asyncio.run(recalculate())
-
-    except ImportError:
-        click.echo(click.style("biz2bricks-core not installed", fg="red"))
-        sys.exit(1)
-    except Exception as e:
-        click.echo(click.style(f"Error: {e}", fg="red"))
-        sys.exit(1)
-
-
-# =============================================================================
 # Environment File Commands
 # =============================================================================
 
@@ -817,6 +684,17 @@ def generate_env(output: str, project_id: str, region: str):
 
     success = generate_env_file(output, project_id, region)
     sys.exit(0 if success else 1)
+
+
+# =============================================================================
+# Commands (imported from commands module)
+# =============================================================================
+
+from biz2bricks_infra.commands.seed import seed
+from biz2bricks_infra.commands.setup import setup
+
+main.add_command(seed)
+main.add_command(setup)
 
 
 if __name__ == "__main__":
