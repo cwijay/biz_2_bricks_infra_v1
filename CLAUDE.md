@@ -23,6 +23,9 @@ biz2bricks setup all --project-id PROJECT --dry-run  # Preview without executing
 biz2bricks setup all --project-id PROJECT --force    # Delete existing resources first, then recreate
 biz2bricks setup all --project-id PROJECT --skip-gcp # Skip GCP, just DB setup
 
+# Verify resources are created correctly
+biz2bricks status --env-file .env           # Check all GCP resources status
+
 # Provision GCP resources (individual)
 biz2bricks provision full-setup     # Provision all GCP resources
 biz2bricks provision full-setup --dry-run  # Preview without executing
@@ -39,7 +42,11 @@ biz2bricks delete gcs-bucket --force # Delete GCS bucket
 # Database management
 biz2bricks db init                  # Create tables from SQLAlchemy models
 biz2bricks db status                # Show database status and tables
-biz2bricks db reset --force         # Drop ALL tables and recreate schema (destructive!)
+biz2bricks db reset --force         # Drop ALL tables, enable pgvector, recreate schema
+
+# Seed data
+biz2bricks seed tiers               # Seed subscription tiers (Free, Pro, Enterprise)
+biz2bricks seed tiers --list        # List current tiers
 
 # Alembic migrations (via biz2bricks-core)
 biz2bricks migrate upgrade head     # Apply all pending migrations
@@ -49,6 +56,28 @@ biz2bricks migrate history          # Show migration history
 
 # Utilities
 biz2bricks generate-env --project-id PROJECT  # Generate .env from provisioned resources
+biz2bricks sa create-key -o key.json          # Create service account JSON key
+biz2bricks secrets list                        # List all secrets
+```
+
+### Common Workflows
+
+```bash
+# New environment setup
+biz2bricks setup all --project-id my-project
+biz2bricks status --env-file .env
+
+# Force recreate everything (deletes and recreates all GCP resources)
+biz2bricks setup all --project-id my-project --force
+# Type 'DELETE' when prompted
+biz2bricks status --env-file .env
+
+# Reset database only (keep GCP resources)
+biz2bricks db reset --force --env-file .env
+biz2bricks seed tiers --env-file .env
+
+# Skip GCP, just database setup
+biz2bricks setup all --project-id my-project --skip-gcp --env-file .env
 ```
 
 ### Development
@@ -63,7 +92,10 @@ pytest                              # Run tests
 
 ```
 src/biz2bricks_infra/
-├── cli.py                 # Click-based CLI entry point (provision, migrate, generate-env commands)
+├── cli.py                 # Click-based CLI entry point
+├── commands/
+│   ├── setup.py           # Complete setup orchestration (setup all command)
+│   └── seed.py            # Subscription tier seeding
 ├── provision/
 │   ├── config.py          # ProvisioningConfig dataclass, loads from .env files
 │   ├── provisioner.py     # Orchestrates resource creation via gcloud commands
@@ -90,7 +122,7 @@ The CLI reads from `.env.production` by default (override with `--env-file`). Re
 
 ## Database Schema
 
-The database includes 17 tables from biz2bricks_core, organized into three modules:
+The database includes 18 tables from biz2bricks_core, organized into modules:
 
 **Core Tables:**
 - `organizations` - Multi-tenant organization data
@@ -100,13 +132,13 @@ The database includes 17 tables from biz2bricks_core, organized into three modul
 - `audit_logs` - Audit trail for all operations
 
 **Usage/Billing Tables:**
-- `usage_events` - Individual usage events
-- `usage_daily_summary` - Aggregated daily usage
-- `usage_limits` - Per-organization usage limits
-- `model_pricing` - AI model pricing configuration
-- `subscription_plans` - Subscription tier definitions
+- `subscription_tiers` - Subscription tier definitions (Free, Pro, Enterprise)
+- `organization_subscriptions` - Organization subscription status
+- `token_usage_records` - Token usage tracking
+- `resource_usage_records` - Resource usage tracking
+- `usage_aggregations` - Aggregated usage statistics
 
-**AI Module Tables (doc_intelligence_ai_v3.0):**
+**AI Module Tables:**
 - `processing_jobs` - Async document processing jobs
 - `document_generations` - AI-generated document outputs
 - `user_preferences` - Per-user AI preferences
@@ -114,5 +146,29 @@ The database includes 17 tables from biz2bricks_core, organized into three modul
 - `memory_entries` - Long-term memory for AI context
 - `file_search_stores` - Vector store references for RAG
 - `document_folders` - Document-to-folder associations
+- `rag_query_cache` - Semantic query caching with pgvector Vector(768)
 
 All tables use UUID primary keys and include `organization_id` for multi-tenant scoping. JSONB columns with GIN indexes are used for flexible metadata storage.
+
+## GCP Resources Created
+
+| Resource | Description |
+|----------|-------------|
+| **Cloud SQL** | PostgreSQL 15 instance with pgvector extension |
+| **GCS Bucket** | Document storage with versioning enabled |
+| **Service Account** | `document-intelligence-api-sa` with Cloud SQL, Storage, Secret Manager roles |
+| **Secrets** | DATABASE_PASSWORD, JWT_SECRET_KEY, REFRESH_SECRET_KEY |
+
+## Verifying Resources
+
+After setup, verify all resources are created:
+
+```bash
+biz2bricks status --env-file .env
+```
+
+Expected output shows:
+- Cloud SQL instance state (RUNNABLE) and IP address
+- GCS bucket existence and versioning status
+- Service account with IAM roles (cloudsql.client, storage.objectAdmin, secretmanager.secretAccessor)
+- Secret Manager secrets (DATABASE_PASSWORD, JWT_SECRET_KEY, REFRESH_SECRET_KEY)

@@ -24,7 +24,7 @@ All database tables are defined in **biz2bricks_core** and created by the `biz2b
 | **Usage Tracking** | subscription_tiers, organization_subscriptions, token_usage_records, resource_usage_records, usage_aggregations | Quota management and usage analytics |
 | **Semantic Cache** | rag_query_cache | RAG query caching with pgvector (768-dim embeddings) |
 
-**Total: 17 tables** created from SQLAlchemy models.
+**Total: 18 tables** created from SQLAlchemy models.
 
 ## Prerequisites
 
@@ -129,11 +129,74 @@ This single command:
 5. Seeds subscription tiers (Free, Pro, Enterprise)
 6. Validates the setup
 
-### Step 4: Start Your Application
+### Step 4: Verify Resources Created
+
+```bash
+# Check status of all GCP resources
+biz2bricks status --env-file .env
+```
+
+Expected output:
+```
+=== GCP Resource Status ===
+
+--- Cloud SQL ---
+  Instance: doc-intelligence-db - RUNNABLE
+    Region: us-central1, Tier: db-f1-micro
+    IP: x.x.x.x
+
+--- GCS Bucket ---
+  Bucket: your-project-document-store - EXISTS
+    Versioning: Enabled
+
+--- Service Account ---
+  Service Account: document-intelligence-api-sa - EXISTS
+    Email: document-intelligence-api-sa@your-project.iam.gserviceaccount.com
+    Roles:
+      - roles/cloudsql.client
+      - roles/secretmanager.secretAccessor
+      - roles/storage.objectAdmin
+
+--- Secret Manager ---
+  DATABASE_PASSWORD - EXISTS
+  JWT_SECRET_KEY - EXISTS
+  REFRESH_SECRET_KEY - EXISTS
+```
+
+### Step 5: Start Your Application
 
 ```bash
 cd ../doc_intelligence_ai_v3.0
 uvicorn src.main:app --reload
+```
+
+---
+
+## Force Recreate: Delete and Recreate All Resources
+
+To completely delete existing GCP resources and recreate them from scratch:
+
+```bash
+# Delete and recreate all resources (requires confirmation)
+biz2bricks setup all --project-id YOUR_PROJECT_ID --force
+```
+
+This will:
+1. **Prompt for confirmation** - Type 'DELETE' to confirm
+2. Delete all existing resources:
+   - Secret Manager secrets
+   - Service Account and IAM bindings
+   - GCS Bucket and all contents
+   - Cloud SQL instance and all data
+3. Provision fresh resources
+4. Generate new `.env` file
+5. Create database tables with pgvector support
+6. Seed subscription tiers
+7. Validate the setup
+
+**Preview force recreate (without executing):**
+```bash
+biz2bricks setup all --project-id YOUR_PROJECT_ID --force --dry-run
 ```
 
 ---
@@ -232,16 +295,13 @@ This creates the default Free, Pro, and Enterprise subscription tiers.
 ### Step 8: Verify Resources
 
 ```bash
-# Check Cloud SQL
+# Quick status check (recommended)
+biz2bricks status --env-file .env
+
+# Or use gcloud commands directly:
 gcloud sql instances describe YOUR_INSTANCE_NAME --format="table(name,state,region)"
-
-# Check GCS bucket
 gsutil ls -b gs://YOUR_BUCKET_NAME
-
-# Check service account
 gcloud iam service-accounts list --filter="email:document-intelligence"
-
-# Check secrets
 gcloud secrets list
 ```
 
@@ -265,6 +325,7 @@ Options:
   --env-file PATH       Provisioning config file (default: .env.production)
   --output-env PATH     Output .env file for app (default: .env)
   --dry-run             Preview actions without executing
+  --force               DELETE existing resources first, then recreate (destructive!)
   --skip-gcp            Skip GCP resource provisioning
   --skip-db             Skip database table creation
   --skip-seed           Skip subscription tier seeding
@@ -282,12 +343,28 @@ biz2bricks setup all --project-id my-project
 # Preview what would be done
 biz2bricks setup all --project-id my-project --dry-run
 
+# Force delete and recreate all resources
+biz2bricks setup all --project-id my-project --force
+
 # Skip GCP (resources already exist), just setup database
 biz2bricks setup all --project-id my-project --skip-gcp
 
 # Only create database tables
 biz2bricks setup db-only --env-file .env
 ```
+
+### Status Command
+
+```bash
+# Check status of all GCP resources
+biz2bricks status --env-file .env
+```
+
+Shows:
+- Cloud SQL instance state and IP
+- GCS bucket existence and versioning
+- Service account and IAM roles
+- Secret Manager secrets
 
 ### Provision Commands
 
@@ -324,6 +401,12 @@ biz2bricks db reset [--env-file .env] [--force] # Drop ALL tables and recreate s
 
 **WARNING:** `db reset` is destructive - it drops all tables and data!
 
+The `db reset` command:
+1. Drops all tables (CASCADE)
+2. Enables pgvector extension
+3. Recreates all tables with proper Vector(768) columns
+4. Ready for vector index creation
+
 ### Seed Commands
 
 ```bash
@@ -356,35 +439,36 @@ biz2bricks migrate history         # Show migration history
 
 ```bash
 biz2bricks generate-env --project-id PROJECT_ID  # Generate .env from provisioned resources
-biz2bricks status                                 # Show status of all provisioned resources
+biz2bricks status --env-file .env                # Show status of all provisioned resources
 biz2bricks sa create-key -o key.json             # Create service account JSON key
 biz2bricks secrets get SECRET_NAME               # Get secret value from Secret Manager
 biz2bricks secrets list                          # List all secrets
 ```
 
-## Force Recreating Resources
+## Common Workflows
 
-The provisioning commands are **idempotent** - they skip existing resources. The `--force` flag only skips confirmation prompts, it does NOT force recreate resources.
-
-To force recreate all resources from scratch:
-
+### New Environment Setup
 ```bash
-# Step 1: Delete all existing resources
-biz2bricks delete all --force
-
-# Step 2: Provision fresh resources
-biz2bricks provision full-setup --force
-
-# Step 3: Recreate database schema
-biz2bricks db init
+biz2bricks setup all --project-id my-project
+biz2bricks status --env-file .env
 ```
 
-To recreate individual resources:
-
+### Force Recreate Everything
 ```bash
-# Example: Recreate only Cloud SQL
-biz2bricks delete cloud-sql --force
-biz2bricks provision cloud-sql --force
+biz2bricks setup all --project-id my-project --force
+# Type 'DELETE' when prompted
+biz2bricks status --env-file .env
+```
+
+### Reset Database Only (Keep GCP Resources)
+```bash
+biz2bricks db reset --force --env-file .env
+biz2bricks seed tiers --env-file .env
+```
+
+### Skip GCP, Just Database Setup
+```bash
+biz2bricks setup all --project-id my-project --skip-gcp --env-file .env
 ```
 
 ## Updating biz2bricks-core
@@ -404,6 +488,22 @@ For database commands (`db init`, `db status`), ensure your `.env` file has the 
 
 ## Architecture
 
+### Project Structure
+
+```
+src/biz2bricks_infra/
+├── cli.py                 # Click-based CLI entry point
+├── commands/
+│   ├── setup.py           # Complete setup orchestration (setup all command)
+│   └── seed.py            # Subscription tier seeding
+├── provision/
+│   ├── config.py          # ProvisioningConfig dataclass
+│   ├── provisioner.py     # GCP resource provisioning via gcloud
+│   └── env_generator.py   # .env file generation
+└── gcloud/
+    └── commands.py        # gcloud/gsutil command wrappers
+```
+
 ### Consolidated Models
 
 All SQLAlchemy models are defined in **biz2bricks_core**:
@@ -413,7 +513,8 @@ biz2bricks_core/src/biz2bricks_core/models/
 ├── base.py       # Base class, enums (AuditAction, AuditEntityType)
 ├── core.py       # OrganizationModel, UserModel, FolderModel
 ├── documents.py  # DocumentModel, AuditLogModel
-└── usage.py      # SubscriptionPlanModel, UsageLimitsModel, UsageEventModel, UsageDailySummaryModel, ModelPricingModel
+├── usage.py      # SubscriptionTierModel, OrganizationSubscriptionModel, TokenUsageRecordModel
+└── rag.py        # RAGQueryCacheModel (with pgvector Vector(768) column)
 ```
 
 ### Table Creation Options
@@ -481,9 +582,25 @@ If that doesn't work, recreate the virtual environment (see Installation section
 
 ### Resources "already exist" but you want to recreate
 
-Use delete commands first, then provision:
+Use the `--force` flag with `setup all`:
+
+```bash
+biz2bricks setup all --project-id my-project --force
+```
+
+Or manually delete and reprovision:
 
 ```bash
 biz2bricks delete all --force
 biz2bricks provision full-setup --force
 ```
+
+### pgvector extension not available
+
+Cloud SQL supports pgvector. Ensure the extension is enabled:
+
+```bash
+biz2bricks db reset --force --env-file .env
+```
+
+This will drop all tables, enable pgvector extension, and recreate tables with proper Vector columns.
