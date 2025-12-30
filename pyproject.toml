@@ -39,7 +39,7 @@ dev = [
 # For complete setup with database operations
 db = [
     "asyncpg>=0.29.0",
-    "google-cloud-sql-connector>=1.10.0",
+    "cloud-sql-python-connector>=1.10.0",
 ]
 
 [project.scripts]
