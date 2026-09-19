@@ -20,3 +20,6 @@ build/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# macOS finder metadata
+.DS_Store
